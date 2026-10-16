@@ -1,0 +1,1172 @@
+############### RODAR O MODELO BLS - LADO OESTE DO CONFINAMENTO ################
+
+# ============================================================
+# Do arquivo SEK_west_sync_all_2025-03-14.csv:
+#   TimeStamp, Ustar, L, Zo, WD, emissão WindTrax, CH4
+#
+# Do arquivo meteorológico completo dados:
+#   u_var, v_var, w_var, air_temperature, air_pressure
+#
+# O objeto dados é criado pela junção dos arquivos:
+#   1) windtrax_westpens_sync_2024-03-14_1330.csv
+#   2) westpens_sync_2025-01-15_10-18.csv
+# ============================================================
+
+
+# ============================================================
+# 1) PACOTES
+# ============================================================
+
+# Instale somente se ainda não tiver:
+# install.packages(c("data.table", "dplyr", "tidyr", "lubridate", "devtools"))
+# install.packages(c("Rcpp", "rlecuyer", "qs2"))
+
+# Instalar/atualizar bLSmodelR:
+# devtools::install_github("ChHaeni/bLSmodelR", dependencies = FALSE)
+
+
+library(bLSmodelR)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+
+
+# ============================================================
+# 2) DIRETÓRIOS
+# ============================================================
+
+dirPath <- "C:/Users/esantos/OneDrive - Kansas State University/AgroComb shared/SEK feedyard experiment/bls_R/Bls_R_test"
+
+CatPath <- file.path(dirPath, "Catalog")
+outPath <- file.path(dirPath, "resultados_bls")
+
+dir.create(CatPath, showWarnings = FALSE, recursive = TRUE)
+dir.create(outPath, showWarnings = FALSE, recursive = TRUE)
+
+
+# ============================================================
+# 3) NOMES DOS ARQUIVOS
+# ============================================================
+
+arquivo_meteorologico_principal <- "windtrax_westpens_sync_2024-03-14_1330.csv"
+
+arquivo_meteorologico_complementar <- "westpens_sync_2025-01-15_10-18.csv"
+
+arquivo_SEK <- "SEK_west_sync_all_2025-03-14.csv"
+
+
+# ============================================================
+# 4) FUNÇÕES AUXILIARES
+# ============================================================
+
+ajustar_timestamp <- function(x) {
+  x <- trimws(as.character(x))
+  
+  parse_date_time(
+    x,
+    orders = c(
+      "mdy HMS",
+      "mdy HM",
+      "ymd HMS",
+      "ymd HM",
+      "dmy HMS",
+      "dmy HM"
+    ),
+    tz = "America/Chicago"
+  )
+}
+
+
+converter_numero <- function(x) {
+  as.numeric(gsub(",", ".", trimws(as.character(x))))
+}
+
+
+# ============================================================
+# 5) LER OS DOIS ARQUIVOS METEOROLÓGICOS
+# ============================================================
+
+met_1 <- fread(
+  file.path(dirPath, arquivo_meteorologico_principal),
+  sep = ",",
+  dec = ".",
+  na.strings = c("", "NA", "NaN")
+)
+
+met_2 <- fread(
+  file.path(dirPath, arquivo_meteorologico_complementar),
+  sep = ",",
+  dec = ".",
+  na.strings = c("", "NA", "NaN")
+)
+
+cat("\nColunas do arquivo meteorológico principal:\n")
+print(names(met_1))
+
+cat("\nColunas do arquivo meteorológico complementar:\n")
+print(names(met_2))
+
+
+# ============================================================
+# 6) VERIFICAR SE OS DOIS ARQUIVOS METEOROLÓGICOS TÊM AS MESMAS COLUNAS
+# ============================================================
+
+mesmas_colunas <- setequal(names(met_1), names(met_2))
+
+cat("\nOs dois arquivos meteorológicos possuem as mesmas colunas, mesmo que em ordem diferente?\n")
+print(mesmas_colunas)
+
+if (!mesmas_colunas) {
+  
+  cat("\nColunas que existem no principal e não existem no complementar:\n")
+  print(setdiff(names(met_1), names(met_2)))
+  
+  cat("\nColunas que existem no complementar e não existem no principal:\n")
+  print(setdiff(names(met_2), names(met_1)))
+  
+  stop("Os arquivos meteorológicos não possuem as mesmas colunas. Verifique os nomes das colunas antes de continuar.")
+}
+
+met_2 <- met_2[, names(met_1), with = FALSE]
+
+cat("\nAs colunas do arquivo complementar foram reorganizadas na mesma ordem do principal.\n")
+
+cat("\nConferência final da ordem das colunas:\n")
+print(identical(names(met_1), names(met_2)))
+
+
+# ============================================================
+# 7) AJUSTAR TimeStamp DOS DOIS ARQUIVOS METEOROLÓGICOS
+# ============================================================
+
+met_1 <- met_1 %>%
+  mutate(TimeStamp = ajustar_timestamp(TimeStamp))
+
+met_2 <- met_2 %>%
+  mutate(TimeStamp = ajustar_timestamp(TimeStamp))
+
+met_1 <- met_1 %>%
+  filter(!is.na(TimeStamp)) %>%
+  arrange(TimeStamp) %>%
+  distinct(TimeStamp, .keep_all = TRUE)
+
+met_2 <- met_2 %>%
+  filter(!is.na(TimeStamp)) %>%
+  arrange(TimeStamp) %>%
+  distinct(TimeStamp, .keep_all = TRUE)
+
+cat("\nNúmero de linhas no meteorológico principal:", nrow(met_1), "\n")
+cat("Número de linhas no meteorológico complementar:", nrow(met_2), "\n")
+
+
+# ============================================================
+# 8) COMPLETAR O ARQUIVO METEOROLÓGICO PRINCIPAL
+# ============================================================
+
+linhas_para_completar <- anti_join(
+  met_2,
+  met_1 %>% select(TimeStamp),
+  by = "TimeStamp"
+)
+
+cat("\nNúmero de linhas adicionadas do complementar ao principal:",
+    nrow(linhas_para_completar), "\n")
+
+dados <- bind_rows(
+  met_1,
+  linhas_para_completar
+) %>%
+  arrange(TimeStamp) %>%
+  distinct(TimeStamp, .keep_all = TRUE)
+
+cat("\nNúmero de linhas no arquivo meteorológico completo dados:",
+    nrow(dados), "\n")
+
+cat("\nResumo do TimeStamp em dados:\n")
+print(summary(dados$TimeStamp))
+
+cat("\nQuantidade de TimeStamp duplicado em dados:\n")
+print(sum(duplicated(dados$TimeStamp)))
+
+
+# ============================================================
+# 9) SALVAR O ARQUIVO METEOROLÓGICO COMPLETO
+# ============================================================
+
+dados_salvar <- dados %>%
+  mutate(TimeStamp = format(TimeStamp, "%Y-%m-%d %H:%M:%S"))
+
+fwrite(
+  dados_salvar,
+  file.path(outPath, "meteorologico_westpens_completo.csv"),
+  sep = ",",
+  dec = "."
+)
+
+cat("\nArquivo meteorológico completo salvo em:\n")
+cat(file.path(outPath, "meteorologico_westpens_completo.csv"), "\n")
+
+
+# ============================================================
+# 10) LER O ARQUIVO SEK
+# ============================================================
+
+SEK_raw <- fread(
+  file.path(dirPath, arquivo_SEK),
+  sep = ",",
+  dec = ".",
+  na.strings = c("", "NA", "NaN"),
+  check.names = FALSE,
+  header = TRUE,
+  stringsAsFactors = FALSE
+)
+
+cat("\nColunas do arquivo SEK:\n")
+print(names(SEK_raw))
+
+
+# ============================================================
+# 11) RECORTAR LINHAS DO ARQUIVO SEK, SE NECESSÁRIO
+# ============================================================
+# 09/03/2024 17:30 até 13/07/2024 19:15
+
+SEK <- as.data.frame(SEK_raw[48:1185, ])
+
+
+# ============================================================
+# 12) RENOMEAR COLUNAS DO ARQUIVO SEK
+# ============================================================
+# V2  = Ustar
+# V3  = L
+# V4  = Zo
+# V5  = WD
+# V6  = taxa de emissão de metano do WindTrax
+# V12 = CH4 LineSensor1
+# V13 = CH4 LineSensor2
+
+if ("V2" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V2"] <- "Ustar"
+}
+
+if ("V3" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V3"] <- "L"
+}
+
+if ("V4" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V4"] <- "Zo"
+}
+
+if ("V5" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V5"] <- "WD"
+}
+
+if ("V6" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V6"] <- "Q_WindTrax_g_m2_day"
+}
+
+if ("V12" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V12"] <- "CH4_LineSensor1_ppmv"
+}
+
+if ("V13" %in% names(SEK)) {
+  names(SEK)[names(SEK) == "V13"] <- "CH4_LineSensor2_ppmv"
+}
+
+
+# ============================================================
+# 13) AJUSTAR TimeStamp DO ARQUIVO SEK
+# ============================================================
+
+if ("WindTrax Simulation Results" %in% names(SEK)) {
+  
+  SEK <- SEK %>%
+    rename(TimeStamp_raw = `WindTrax Simulation Results`)
+  
+} else if ("TimeStamp" %in% names(SEK)) {
+  
+  SEK <- SEK %>%
+    rename(TimeStamp_raw = TimeStamp)
+  
+} else {
+  
+  stop("Não encontrei a coluna de data/hora no arquivo SEK.")
+}
+
+SEK <- SEK %>%
+  mutate(
+    TimeStamp_raw = trimws(as.character(TimeStamp_raw)),
+    
+    TimeStamp_raw = if_else(
+      grepl("^Missing data encountered in input file", TimeStamp_raw),
+      NA_character_,
+      TimeStamp_raw
+    ),
+    
+    TimeStamp = ajustar_timestamp(TimeStamp_raw)
+  ) %>%
+  filter(!is.na(TimeStamp)) %>%
+  select(-TimeStamp_raw)
+
+cat("\nResumo do TimeStamp no arquivo SEK:\n")
+print(summary(SEK$TimeStamp))
+
+
+# ============================================================
+# 14) CONVERTER COLUNAS NUMÉRICAS DO SEK
+# ============================================================
+
+SEK <- SEK %>%
+  mutate(
+    Ustar = converter_numero(Ustar),
+    L = converter_numero(L),
+    Zo = converter_numero(Zo),
+    WD = converter_numero(WD),
+    Q_WindTrax_g_m2_day = converter_numero(Q_WindTrax_g_m2_day),
+    CH4_LineSensor1_ppmv = converter_numero(CH4_LineSensor1_ppmv),
+    CH4_LineSensor2_ppmv = converter_numero(CH4_LineSensor2_ppmv)
+  )
+
+cat("\nResumo da emissão do WindTrax vinda da coluna V6 do SEK:\n")
+print(summary(SEK$Q_WindTrax_g_m2_day))
+
+
+# ============================================================
+# 15) PREPARAR METEOROLOGIA COMPLETA dados
+# ============================================================
+
+met_extra <- dados %>%
+  select(
+    TimeStamp,
+    u_var,
+    v_var,
+    w_var,
+    air_temperature,
+    air_pressure
+  ) %>%
+  mutate(
+    u_var = converter_numero(u_var),
+    v_var = converter_numero(v_var),
+    w_var = converter_numero(w_var),
+    air_temperature = converter_numero(air_temperature),
+    air_pressure = converter_numero(air_pressure)
+  ) %>%
+  filter(!is.na(TimeStamp)) %>%
+  arrange(TimeStamp) %>%
+  distinct(TimeStamp, .keep_all = TRUE)
+
+cat("\nNúmero de linhas em met_extra:", nrow(met_extra), "\n")
+
+
+# ============================================================
+# 16) JUNTAR SEK + METEOROLOGIA COMPLETA
+# ============================================================
+# TimeStamp, Ustar, L, Zo, WD, WindTrax e CH4 vêm do SEK.
+# u_var, v_var, w_var, air_temperature e air_pressure vêm de dados.
+
+dados_modelo <- SEK %>%
+  select(
+    TimeStamp,
+    Ustar,
+    L,
+    Zo,
+    WD,
+    Q_WindTrax_g_m2_day,
+    CH4_LineSensor1_ppmv,
+    CH4_LineSensor2_ppmv
+  ) %>%
+  inner_join(
+    met_extra,
+    by = "TimeStamp"
+  )
+
+cat("\nNúmero de linhas no arquivo SEK:", nrow(SEK), "\n")
+cat("Número de linhas em met_extra:", nrow(met_extra), "\n")
+cat("Número de linhas após juntar SEK + met_extra:", nrow(dados_modelo), "\n")
+
+cat("\nQuantidade de NA por coluna em dados_modelo:\n")
+print(colSums(is.na(dados_modelo)))
+
+
+# ============================================================
+# 17) VERIFICAR HORÁRIOS QUE NÃO CASARAM
+# ============================================================
+
+faltam_met_para_SEK <- anti_join(
+  SEK %>% select(TimeStamp),
+  met_extra %>% select(TimeStamp),
+  by = "TimeStamp"
+)
+
+faltam_SEK_para_met <- anti_join(
+  met_extra %>% select(TimeStamp),
+  SEK %>% select(TimeStamp),
+  by = "TimeStamp"
+)
+
+cat("\nHorários que existem no SEK, mas não existem em met_extra:",
+    nrow(faltam_met_para_SEK), "\n")
+
+cat("\nPrimeiros horários que existem no SEK, mas faltam na meteorologia completa:\n")
+print(head(faltam_met_para_SEK, 20))
+
+cat("\nHorários que existem em met_extra, mas não existem no SEK:",
+    nrow(faltam_SEK_para_met), "\n")
+
+
+# ============================================================
+# 18) DEFINIR PARÂMETROS FIXOS DO bLS
+# ============================================================
+
+dados_modelo <- dados_modelo %>%
+  mutate(
+    d = 0.067,
+    z_sWu = 2.10,
+    N0 = 3E4,
+    MaxFetch = 500
+  )
+
+
+# ============================================================
+# 19) CALCULAR sUu, sVu E sWu
+# ============================================================
+
+dados_modelo <- dados_modelo %>%
+  mutate(
+    sigma_u = sqrt(u_var),
+    sigma_v = sqrt(v_var),
+    sigma_w = sqrt(w_var),
+    
+    sUu = sigma_u / Ustar,
+    sVu = sigma_v / Ustar,
+    sWu = sigma_w / Ustar
+  )
+
+
+# ============================================================
+# 20) FILTRAR DADOS VÁLIDOS PARA O bLS
+# ============================================================
+
+dados_bls <- dados_modelo %>%
+  filter(
+    !is.na(TimeStamp),
+    !is.na(Ustar),
+    !is.na(L),
+    !is.na(Zo),
+    !is.na(WD),
+    !is.na(u_var),
+    !is.na(v_var),
+    !is.na(w_var),
+    !is.na(sUu),
+    !is.na(sVu),
+    !is.na(sWu),
+    !is.na(z_sWu),
+    !is.na(d),
+    !is.na(N0),
+    !is.na(MaxFetch),
+    
+    Ustar > 0,
+    WD >= 0,
+    WD <= 360,
+    
+    is.finite(L),
+    is.finite(sUu),
+    is.finite(sVu),
+    is.finite(sWu)
+  )
+
+cat("\nNúmero de linhas em dados_modelo:", nrow(dados_modelo), "\n")
+cat("Número de linhas após filtros do bLS:", nrow(dados_bls), "\n")
+
+cat("\nResumo das variáveis usadas no bLS:\n")
+print(summary(dados_bls[, c("Ustar", "L", "Zo", "WD", "sUu", "sVu", "sWu")]))
+
+
+# ============================================================
+# 21) DEFINIR SENSORES
+# ============================================================
+
+Sensors <- genSensors(
+  LineSensor1 = list(
+    x = c(56.554, 5.523),
+    y = c(33.988, 46.169),
+    z = c(1.50, 2.36),
+    d = 1.81
+  ),
+  
+  LineSensor2 = list(
+    x = c(54.936, 0.0),
+    y = c(4.784, 0.0),
+    z = c(1.33, 2.06),
+    d = 1.90
+  )
+)
+
+plot(Sensors, main = "Linhas de sensores")
+
+
+# ============================================================
+# 22) DEFINIR FONTE EMISSORA
+# ============================================================
+
+Sources <- genSources(
+  Feedlot = list(
+    Class = "p",
+    x = c(4.57, 35.15, 36.42, 6.12),
+    y = c(4.08, 4.08, 34.38, 34.67161695)
+  )
+)
+
+plot(Sources, Sensors, main = "Fonte e sensores")
+
+
+# ============================================================
+# 23) CALCULAR ÁREA DA FONTE PELO PACOTE
+# ============================================================
+
+SourceArea_m2 <- as.numeric(getArea(Sources)["Feedlot"])
+
+cat("\nÁrea da fonte calculada pelo bLSmodelR =", SourceArea_m2, "m²\n")
+
+
+# ============================================================
+# 24) CRIAR INTERVALOS DO bLSmodelR
+# ============================================================
+
+IntervalData <- dados_bls %>%
+  mutate(
+    SensorNames = "LineSensor1,LineSensor2",
+    SourceNames = "Feedlot"
+  ) %>%
+  select(
+    TimeStamp,
+    Ustar,
+    L,
+    Zo,
+    sUu,
+    sVu,
+    sWu,
+    z_sWu,
+    WD,
+    d,
+    N0,
+    MaxFetch,
+    SensorNames,
+    SourceNames
+  )
+
+Intervals <- genInterval(Data = IntervalData)
+
+cat("\nPrimeiras linhas de Intervals:\n")
+print(head(Intervals))
+
+
+# ============================================================
+# 25) CONFIGURAR MODELO
+# ============================================================
+
+Model <- genModel(
+  TDwrite = TRUE,
+  overwriteTD = TRUE,
+  TDread = TRUE,
+  TDonly = FALSE,
+  ncores = 14
+)
+
+Tolerances <- genTolerances()
+
+
+# ============================================================
+# 26) MONTAR LISTA DE ENTRADA
+# ============================================================
+
+InputList <- genInputList(
+  Intervals,
+  Sensors,
+  Sources,
+  Model,
+  Tolerances
+)
+
+plot(InputList, main = "Configuração bLS")
+
+
+# ============================================================
+# 27) RODAR O MODELO bLS
+# ============================================================
+
+Results_bls <- runbLS(
+  InputList,
+  Cat.Path = CatPath,
+  asDT = FALSE
+)
+
+Results_bls <- switchNames(Results_bls)
+
+cat("\nColunas do resultado do bLS:\n")
+print(names(Results_bls))
+
+cat("\nPrimeiras linhas do resultado bLS:\n")
+print(head(Results_bls))
+
+
+# ============================================================
+# 28) PREPARAR RESULTADOS DE CE
+# ============================================================
+
+Results_CE <- Results_bls %>%
+  as.data.frame() %>%
+  select(
+    TimeStamp,
+    Sensor,
+    Source,
+    CE,
+    CE_se,
+    CE_lo,
+    CE_hi,
+    everything()
+  ) %>%
+  filter(
+    !is.na(CE),
+    CE > 0
+  )
+
+cat("\nNúmero de linhas com CE válido:", nrow(Results_CE), "\n")
+
+
+# ============================================================
+# 29) ESTIMAR Cb DE CH4 USANDO AS DUAS LINHAS
+# ============================================================
+# Método:
+#   Cb = menor concentração entre as duas linhas no mesmo horário.
+#
+# Depois fica apenas a linha com maior concentração, interpretada
+# como linha mais influenciada pela pluma naquele horário.
+
+conc_df <- dados_modelo %>%
+  select(
+    TimeStamp,
+    CH4_LineSensor1_ppmv,
+    CH4_LineSensor2_ppmv
+  ) %>%
+  filter(
+    !is.na(TimeStamp),
+    !is.na(CH4_LineSensor1_ppmv),
+    !is.na(CH4_LineSensor2_ppmv)
+  ) %>%
+  mutate(
+    Cb_CH4_ppmv = pmin(
+      CH4_LineSensor1_ppmv,
+      CH4_LineSensor2_ppmv,
+      na.rm = TRUE
+    ),
+    
+    Sensor_downwind = case_when(
+      CH4_LineSensor1_ppmv > CH4_LineSensor2_ppmv ~ "LineSensor1",
+      CH4_LineSensor2_ppmv > CH4_LineSensor1_ppmv ~ "LineSensor2",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  pivot_longer(
+    cols = c(CH4_LineSensor1_ppmv, CH4_LineSensor2_ppmv),
+    names_to = "Sensor_col",
+    values_to = "CH4_ppmv"
+  ) %>%
+  mutate(
+    Sensor = case_when(
+      Sensor_col == "CH4_LineSensor1_ppmv" ~ "LineSensor1",
+      Sensor_col == "CH4_LineSensor2_ppmv" ~ "LineSensor2",
+      TRUE ~ NA_character_
+    ),
+    
+    CH4_delta_ppmv = CH4_ppmv - Cb_CH4_ppmv
+  ) %>%
+  filter(Sensor == Sensor_downwind) %>%
+  select(
+    TimeStamp,
+    Sensor,
+    CH4_ppmv,
+    Cb_CH4_ppmv,
+    CH4_delta_ppmv
+  )
+
+cat("\nNúmero de linhas após estimar Cb:", nrow(conc_df), "\n")
+
+cat("\nResumo de Cb_CH4_ppmv:\n")
+print(summary(conc_df$Cb_CH4_ppmv))
+
+cat("\nResumo de CH4_delta_ppmv:\n")
+print(summary(conc_df$CH4_delta_ppmv))
+
+
+# ============================================================
+# 30) CRIAR TABELA DE TEMPERATURA E PRESSÃO PARA CONVERSÃO
+# ============================================================
+
+met_conv <- dados_modelo %>%
+  select(
+    TimeStamp,
+    air_temperature,
+    air_pressure
+  ) %>%
+  filter(
+    !is.na(TimeStamp),
+    !is.na(air_temperature),
+    !is.na(air_pressure)
+  ) %>%
+  mutate(
+    T_K = converter_numero(air_temperature),
+    P_Pa = converter_numero(air_pressure)
+  ) %>%
+  select(
+    TimeStamp,
+    T_K,
+    P_Pa
+  )
+
+cat("\nNúmero de linhas em met_conv:", nrow(met_conv), "\n")
+
+cat("\nResumo de temperatura usada na conversão:\n")
+print(summary(met_conv$T_K))
+
+cat("\nResumo de pressão usada na conversão:\n")
+print(summary(met_conv$P_Pa))
+
+
+# ============================================================
+# 31) VERIFICAR DATAS EM COMUM ENTRE CE, CONCENTRAÇÃO E METEOROLOGIA
+# ============================================================
+
+datas_CE <- Results_CE %>%
+  select(TimeStamp) %>%
+  distinct()
+
+datas_conc <- conc_df %>%
+  select(TimeStamp) %>%
+  distinct()
+
+datas_met <- met_conv %>%
+  select(TimeStamp) %>%
+  distinct()
+
+cat("\nNúmero de horários em Results_CE:", nrow(datas_CE), "\n")
+cat("Número de horários em conc_df:", nrow(datas_conc), "\n")
+cat("Número de horários em met_conv:", nrow(datas_met), "\n")
+
+faltam_met_para_CE <- anti_join(
+  datas_CE,
+  datas_met,
+  by = "TimeStamp"
+)
+
+faltam_conc_para_CE <- anti_join(
+  datas_CE,
+  datas_conc,
+  by = "TimeStamp"
+)
+
+cat("\nHorários com CE, mas sem meteorologia para conversão:",
+    nrow(faltam_met_para_CE), "\n")
+
+cat("Horários com CE, mas sem concentração:",
+    nrow(faltam_conc_para_CE), "\n")
+
+cat("\nPrimeiros horários com CE, mas sem meteorologia:\n")
+print(head(faltam_met_para_CE, 20))
+
+cat("\nPrimeiros horários com CE, mas sem concentração:\n")
+print(head(faltam_conc_para_CE, 20))
+
+
+# ============================================================
+# 32) JUNTAR CE + CONCENTRAÇÃO + TEMPERATURA/PRESSÃO
+# ============================================================
+
+Results_emission <- Results_CE %>%
+  inner_join(conc_df, by = c("TimeStamp", "Sensor")) %>%
+  inner_join(met_conv, by = "TimeStamp")
+
+cat("\nLinhas em Results_CE:", nrow(Results_CE), "\n")
+cat("Linhas em conc_df:", nrow(conc_df), "\n")
+cat("Linhas em met_conv:", nrow(met_conv), "\n")
+cat("Linhas após juntar tudo:", nrow(Results_emission), "\n")
+
+
+# ============================================================
+# 33) CALCULAR EMISSÃO DE CH4
+# ============================================================
+
+MW_CH4 <- 16.04
+R_gas  <- 8.314462618
+
+Results_emission <- Results_emission %>%
+  mutate(
+    CH4_delta_ppmv = ifelse(CH4_delta_ppmv <= 0, NA, CH4_delta_ppmv),
+    
+    # Conversão ppmv para ug/m3:
+    # ug/m3 = ppmv * P * MW / (R * T)
+    CH4_delta_ug_m3 = CH4_delta_ppmv * P_Pa * MW_CH4 / (R_gas * T_K),
+    
+    # CE = C / E
+    # E = C / CE
+    Q_ug_m2_s = CH4_delta_ug_m3 / CE,
+    
+    # ug/m2/s para g/m2/dia
+    Q_g_m2_day = Q_ug_m2_s * 86400 / 1E6
+  )
+
+
+# ============================================================
+# 34) CALCULAR EMISSÃO TOTAL DA FONTE
+# ============================================================
+
+Results_emission <- Results_emission %>%
+  mutate(
+    SourceArea_m2 = SourceArea_m2,
+    
+    Q_total_ug_s = Q_ug_m2_s * SourceArea_m2,
+    Q_total_mg_s = Q_total_ug_s / 1000,
+    Q_total_g_s = Q_total_ug_s / 1E6,
+    Q_total_kg_day = Q_total_g_s * 86400 / 1000
+  )
+
+
+# ============================================================
+# 35) RESUMOS GERAIS DO RESULTADO DO R
+# ============================================================
+
+cat("\nResumo do CE:\n")
+print(summary(Results_emission$CE))
+
+cat("\nResumo de Cb_CH4_ppmv:\n")
+print(summary(Results_emission$Cb_CH4_ppmv))
+
+cat("\nResumo de CH4_ppmv:\n")
+print(summary(Results_emission$CH4_ppmv))
+
+cat("\nResumo de CH4_delta_ppmv:\n")
+print(summary(Results_emission$CH4_delta_ppmv))
+
+cat("\nResumo de CH4_delta_ug_m3:\n")
+print(summary(Results_emission$CH4_delta_ug_m3))
+
+cat("\nResumo de Q_ug_m2_s:\n")
+print(summary(Results_emission$Q_ug_m2_s))
+
+cat("\nResumo de Q_g_m2_day:\n")
+print(summary(Results_emission$Q_g_m2_day))
+
+cat("\nResumo de Q_total_kg_day:\n")
+print(summary(Results_emission$Q_total_kg_day))
+
+
+# ============================================================
+# 36) RESUMO POR SENSOR
+# ============================================================
+
+Resumo_por_sensor <- Results_emission %>%
+  group_by(Sensor) %>%
+  summarise(
+    n = n(),
+    
+    CE_medio = mean(CE, na.rm = TRUE),
+    CE_mediana = median(CE, na.rm = TRUE),
+    
+    Cb_CH4_ppmv_medio = mean(Cb_CH4_ppmv, na.rm = TRUE),
+    CH4_ppmv_medio = mean(CH4_ppmv, na.rm = TRUE),
+    CH4_delta_ppmv_medio = mean(CH4_delta_ppmv, na.rm = TRUE),
+    
+    Q_ug_m2_s_medio = mean(Q_ug_m2_s, na.rm = TRUE),
+    Q_ug_m2_s_mediana = median(Q_ug_m2_s, na.rm = TRUE),
+    
+    Q_g_m2_day_medio = mean(Q_g_m2_day, na.rm = TRUE),
+    Q_g_m2_day_mediana = median(Q_g_m2_day, na.rm = TRUE),
+    
+    Q_total_mg_s_medio = mean(Q_total_mg_s, na.rm = TRUE),
+    Q_total_kg_day_medio = mean(Q_total_kg_day, na.rm = TRUE),
+    
+    .groups = "drop"
+  )
+
+cat("\nResumo por sensor:\n")
+print(Resumo_por_sensor)
+
+
+# ============================================================
+# 37) COMPARAR EMISSÃO DO R COM EMISSÃO DO WINDTRAX
+# ============================================================
+# Coluna do R:
+#   Q_g_m2_day
+#
+# Coluna do WindTrax:
+#   Q_WindTrax_g_m2_day
+#
+# Critério:
+#   remover linhas em que Q_g_m2_day seja negativo
+#   OU em que Q_WindTrax_g_m2_day seja negativo.
+
+
+windtrax_df <- dados_modelo %>%
+  select(
+    TimeStamp,
+    Q_WindTrax_g_m2_day
+  ) %>%
+  distinct(TimeStamp, .keep_all = TRUE)
+
+Comparacao_R_WindTrax <- Results_emission %>%
+  select(
+    TimeStamp,
+    Sensor,
+    Q_R_g_m2_day = Q_g_m2_day
+  ) %>%
+  inner_join(
+    windtrax_df,
+    by = "TimeStamp"
+  ) %>%
+  filter(
+    !is.na(Q_R_g_m2_day),
+    !is.na(Q_WindTrax_g_m2_day),
+    Q_R_g_m2_day >= 0,
+    Q_WindTrax_g_m2_day >= 0
+  ) %>%
+  arrange(TimeStamp)
+
+cat("\nNúmero de linhas em Results_emission:", nrow(Results_emission), "\n")
+cat("Número de linhas após juntar com WindTrax e remover negativos:",
+    nrow(Comparacao_R_WindTrax), "\n")
+
+cat("\nPrimeiras linhas da comparação R x WindTrax:\n")
+print(head(Comparacao_R_WindTrax))
+
+
+# ============================================================
+# 38) ESTATÍSTICA DAS DUAS COLUNAS DE EMISSÃO
+# ============================================================
+
+Estatistica_R_WindTrax <- Comparacao_R_WindTrax %>%
+  summarise(
+    n = n(),
+    
+    R_min = min(Q_R_g_m2_day, na.rm = TRUE),
+    R_Q1 = quantile(Q_R_g_m2_day, 0.25, na.rm = TRUE),
+    R_mediana = median(Q_R_g_m2_day, na.rm = TRUE),
+    R_media = mean(Q_R_g_m2_day, na.rm = TRUE),
+    R_Q3 = quantile(Q_R_g_m2_day, 0.75, na.rm = TRUE),
+    R_max = max(Q_R_g_m2_day, na.rm = TRUE),
+    R_desvio_padrao = sd(Q_R_g_m2_day, na.rm = TRUE),
+    
+    WindTrax_min = min(Q_WindTrax_g_m2_day, na.rm = TRUE),
+    WindTrax_Q1 = quantile(Q_WindTrax_g_m2_day, 0.25, na.rm = TRUE),
+    WindTrax_mediana = median(Q_WindTrax_g_m2_day, na.rm = TRUE),
+    WindTrax_media = mean(Q_WindTrax_g_m2_day, na.rm = TRUE),
+    WindTrax_Q3 = quantile(Q_WindTrax_g_m2_day, 0.75, na.rm = TRUE),
+    WindTrax_max = max(Q_WindTrax_g_m2_day, na.rm = TRUE),
+    WindTrax_desvio_padrao = sd(Q_WindTrax_g_m2_day, na.rm = TRUE),
+    
+    diferenca_media_R_menos_WindTrax = mean(
+      Q_R_g_m2_day - Q_WindTrax_g_m2_day,
+      na.rm = TRUE
+    ),
+    
+    diferenca_mediana_R_menos_WindTrax = median(
+      Q_R_g_m2_day - Q_WindTrax_g_m2_day,
+      na.rm = TRUE
+    ),
+    
+    RMSE = sqrt(
+      mean(
+        (Q_R_g_m2_day - Q_WindTrax_g_m2_day)^2,
+        na.rm = TRUE
+      )
+    ),
+    
+    correlacao_Pearson = cor(
+      Q_R_g_m2_day,
+      Q_WindTrax_g_m2_day,
+      use = "complete.obs",
+      method = "pearson"
+    )
+  )
+
+cat("\nEstatística das emissões do R e do WindTrax:\n")
+print(Estatistica_R_WindTrax)
+
+
+# ============================================================
+# 39) ORGANIZAR DADOS PARA GRÁFICO DE LINHA
+# ============================================================
+
+Comparacao_R_WindTrax_longo <- Comparacao_R_WindTrax %>%
+  select(
+    TimeStamp,
+    Q_R_g_m2_day,
+    Q_WindTrax_g_m2_day
+  ) %>%
+  pivot_longer(
+    cols = c(Q_R_g_m2_day, Q_WindTrax_g_m2_day),
+    names_to = "Modelo",
+    values_to = "Q_g_m2_day"
+  ) %>%
+  mutate(
+    Modelo = case_when(
+      Modelo == "Q_R_g_m2_day" ~ "R - bLSmodelR",
+      Modelo == "Q_WindTrax_g_m2_day" ~ "WindTrax",
+      TRUE ~ Modelo
+    )
+  )
+
+
+# ============================================================
+# 40) GRÁFICO DE LINHA: R x WINDTRAX
+# ============================================================
+
+Grafico_R_WindTrax <- ggplot(
+  Comparacao_R_WindTrax_longo,
+  aes(
+    x = TimeStamp,
+    y = Q_g_m2_day,
+    color = Modelo
+  )
+) +
+  geom_line(linewidth = 0.8, na.rm = TRUE) +
+  geom_point(size = 1.5, na.rm = TRUE) +
+  labs(
+    title = "Comparação da taxa de emissão de CH4: R x WindTrax",
+    x = "Período de tempo",
+    y = expression("Taxa de emissão de CH"[4]*" (g m"^{-2}*" dia"^{-1}*")"),
+    color = "Modelo"
+  ) +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+print(Grafico_R_WindTrax)
+
+
+# ============================================================
+# 41) SALVAR RESULTADOS DO R
+# ============================================================
+
+Results_emission_2 <- Results_emission %>%
+  mutate(TimeStamp = format(TimeStamp, "%Y-%m-%d %H:%M:%S"))
+
+Resumo_por_sensor_2 <- Resumo_por_sensor
+
+# Para Excel em português:
+# separador ; e vírgula decimal
+fwrite(
+  Results_emission_2,
+  file.path(outPath, "Results_bLS_CH4_emission_SEK_met_completo_area_500_2.csv"),
+  sep = ";",
+  dec = ","
+)
+
+fwrite(
+  Resumo_por_sensor_2,
+  file.path(outPath, "Resumo_bLS_CH4_por_sensor_SEK_met_completo_area_500_2.csv"),
+  sep = ";",
+  dec = ","
+)
+
+# Para reabrir no R:
+# separador , e ponto decimal
+fwrite(
+  Results_emission,
+  file.path(outPath, "Results_bLS_CH4_emission_SEK_met_completo_ponto_decimal_area_500_2.csv"),
+  sep = ",",
+  dec = "."
+)
+
+fwrite(
+  Resumo_por_sensor,
+  file.path(outPath, "Resumo_bLS_CH4_por_sensor_SEK_met_completo_ponto_decimal_area_500_2.csv"),
+  sep = ",",
+  dec = "."
+)
+
+
+# ============================================================
+# 42) SALVAR COMPARAÇÃO R x WINDTRAX
+# ============================================================
+
+Comparacao_R_WindTrax_salvar <- Comparacao_R_WindTrax %>%
+  mutate(
+    TimeStamp = format(TimeStamp, "%Y-%m-%d %H:%M:%S")
+  )
+
+Comparacao_R_WindTrax_longo_salvar <- Comparacao_R_WindTrax_longo %>%
+  mutate(
+    TimeStamp = format(TimeStamp, "%Y-%m-%d %H:%M:%S")
+  )
+
+# Para Excel em português:
+# separador ; e vírgula decimal
+fwrite(
+  Comparacao_R_WindTrax_salvar,
+  file.path(outPath, "Comparacao_emissao_R_WindTrax_sem_negativos.csv"),
+  sep = ";",
+  dec = ","
+)
+
+fwrite(
+  Estatistica_R_WindTrax,
+  file.path(outPath, "Estatistica_emissao_R_WindTrax_sem_negativos.csv"),
+  sep = ";",
+  dec = ","
+)
+
+fwrite(
+  Comparacao_R_WindTrax_longo_salvar,
+  file.path(outPath, "Comparacao_emissao_R_WindTrax_longo_sem_negativos.csv"),
+  sep = ";",
+  dec = ","
+)
+
+# Para reabrir no R:
+# separador , e ponto decimal
+fwrite(
+  Comparacao_R_WindTrax,
+  file.path(outPath, "Comparacao_emissao_R_WindTrax_sem_negativos_ponto_decimal.csv"),
+  sep = ",",
+  dec = "."
+)
+
+fwrite(
+  Estatistica_R_WindTrax,
+  file.path(outPath, "Estatistica_emissao_R_WindTrax_sem_negativos_ponto_decimal.csv"),
+  sep = ",",
+  dec = "."
+)
+
+fwrite(
+  Comparacao_R_WindTrax_longo,
+  file.path(outPath, "Comparacao_emissao_R_WindTrax_longo_sem_negativos_ponto_decimal.csv"),
+  sep = ",",
+  dec = "."
+)
+
+# Salvar gráfico em PNG
+ggsave(
+  filename = file.path(outPath, "Grafico_linha_emissao_R_WindTrax_sem_negativos.png"),
+  plot = Grafico_R_WindTrax,
+  width = 12,
+  height = 6,
+  dpi = 300
+)
+
+
+# ============================================================
+# 43) SALVAR TAMBÉM A BASE USADA NO MODELO
+# ============================================================
+
+dados_modelo_salvar <- dados_modelo %>%
+  mutate(TimeStamp = format(TimeStamp, "%Y-%m-%d %H:%M:%S"))
+
+fwrite(
+  dados_modelo_salvar,
+  file.path(outPath, "dados_modelo_SEK_mais_met_completo_area_500_2.csv"),
+  sep = ",",
+  dec = "."
+)
